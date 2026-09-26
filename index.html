@@ -25,6 +25,11 @@ canvas{display:block;width:100%;height:auto;background:#eee}
   <button class="btn" id="analyze" disabled>BUILD</button>
  </div>
  <div class="row" style="margin-top:8px"><button class="btn" id="play" disabled>PLAY</button><button class="btn" id="regen" disabled>NEW COURSE</button></div>
+ <div style="margin-top:10px">
+  <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:900"><span>START POINT</span><span id="startLabel">0:00</span></div>
+  <input id="startRange" type="range" min="0" max="0" value="0" step="0.1" style="width:100%;margin-top:6px">
+  <div class="row" style="margin-top:5px"><button class="btn" id="back15" disabled>−15 SEC</button><button class="btn" id="forward15" disabled>+15 SEC</button></div>
+ </div>
  <div id="status">Choose the VOCALS stem and INSTRUMENTAL stem.</div><div id="meter"><div></div></div>
  <div id="stats"><span id="name">NEED 2 FILES</span><span id="notes">0 EVENTS</span></div>
 </div>
@@ -33,8 +38,9 @@ canvas{display:block;width:100%;height:auto;background:#eee}
 <script>
 const VF=document.getElementById('vocalFile'),IF=document.getElementById('instFile'),A=document.getElementById('analyze'),P=document.getElementById('play'),R=document.getElementById('regen');
 const S=document.getElementById('status'),M=document.querySelector('#meter div'),N=document.getElementById('name'),NS=document.getElementById('notes');
+const SR=document.getElementById('startRange'),SL=document.getElementById('startLabel'),B15=document.getElementById('back15'),F15=document.getElementById('forward15');
 const C=document.getElementById('c'),X=C.getContext('2d');
-let ctx,vocalBuf=null,instBuf=null,buf=null,events=[],course=[],src=null,start=0,raf=0,playing=false,fileName='',master=null,synth=null;
+let ctx,vocalBuf=null,instBuf=null,buf=null,events=[],course=[],src=null,start=0,raf=0,playing=false,fileName='',master=null,synth=null,startOffset=0;
 const set=(s,p=0)=>{S.textContent=s;M.style.width=p+'%'};
 async function loadAudio(input,kind){
  const f=input.files&&input.files[0];if(!f)return;
@@ -43,6 +49,7 @@ async function loadAudio(input,kind){
   if(!master){master=ctx.createGain();master.gain.value=1;master.connect(ctx.destination)}
   set('Loading '+kind+'…',25);const ab=await f.arrayBuffer();const b=await ctx.decodeAudioData(ab.slice(0));
   if(kind==='vocals')vocalBuf=b;else instBuf=b;
+  if(instBuf){SR.max=Math.max(0,instBuf.duration-.05);B15.disabled=false;F15.disabled=false}
   N.textContent=(vocalBuf?'VOCALS ✓ ':'')+(instBuf?'INSTRUMENTAL ✓':'');
   A.disabled=!(vocalBuf&&instBuf);P.disabled=true;
   set(vocalBuf&&instBuf?'Both stems loaded. Tap BUILD.':'Now choose the other stem.',50);
@@ -102,9 +109,11 @@ P.onclick=async()=>{
  }catch(e){set('Audio could not start: '+(e.message||e),100);return}
  src=ctx.createBufferSource();src.buffer=buf;
  if(!master){master=ctx.createGain();master.gain.value=1;master.connect(ctx.destination)}
- src.connect(master);start=ctx.currentTime;nextNote=0;camY=410-pos(0).y;src.start();playing=true;P.textContent='STOP';src.onended=stop;tick();
+ src.connect(master);start=ctx.currentTime-startOffset;
+ nextNote=0;while(nextNote<events.length&&events[nextNote].t<startOffset)nextNote++;
+ camY=410-pos(startOffset).y;src.start(0,startOffset);playing=true;P.textContent='STOP';src.onended=stop;tick();
 };
-function stop(){if(src){try{src.stop()}catch(e){}src=null}playing=false;P.textContent='PLAY';cancelAnimationFrame(raf);draw(0)}
+function stop(){if(src){try{src.stop()}catch(e){}src=null}playing=false;P.textContent='PLAY';cancelAnimationFrame(raf);draw(startOffset)}
 let nextNote=0;
 function bounceTone(midi,str=1){
  const now=ctx.currentTime,o=ctx.createOscillator(),g=ctx.createGain();
@@ -114,7 +123,7 @@ function bounceTone(midi,str=1){
 }
 function tick(){if(!playing)return;let t=ctx.currentTime-start;
  while(nextNote<events.length&&events[nextNote].t<=t+.025){bounceTone(events[nextNote].p,events[nextNote].str);nextNote++}
- draw(t);if(t<buf.duration)raf=requestAnimationFrame(tick)}
+ draw(t);if(t<buf.duration){SR.value=t;SL.textContent=fmt(t);raf=requestAnimationFrame(tick)}else stop()}
 let camY=0;
 function cameraFor(t){
  let b=pos(t);
@@ -150,6 +159,15 @@ function draw(t){
 }
 function drawIdle(){X.fillStyle='#ddd';X.fillRect(0,0,600,820);X.fillStyle='#777';X.textAlign='center';X.font='bold 22px Arial';X.fillText('LOAD BOTH STEMS',300,390);X.font='14px Arial';X.fillText('The course will be generated here.',300,420);X.textAlign='left'}
 function fmt(s){s=Math.max(0,s||0);return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')}
+function setStart(v){
+ if(!instBuf)return;
+ startOffset=Math.max(0,Math.min(instBuf.duration-.05,Number(v)||0));
+ SR.value=startOffset;SL.textContent=fmt(startOffset);
+ if(!playing)draw(startOffset);
+}
+SR.oninput=()=>setStart(SR.value);
+B15.onclick=()=>setStart(startOffset-15);
+F15.onclick=()=>setStart(startOffset+15);
 function noteName(m){let a=['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];return a[((Math.round(m)%12)+12)%12]}
 drawIdle();
 </script></body></html>
