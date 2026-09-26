@@ -33,7 +33,7 @@ canvas{display:block;width:100%;height:auto;background:#eee}
 const F=document.getElementById('file'),A=document.getElementById('analyze'),P=document.getElementById('play'),R=document.getElementById('regen');
 const S=document.getElementById('status'),M=document.querySelector('#meter div'),N=document.getElementById('name'),NS=document.getElementById('notes');
 const C=document.getElementById('c'),X=C.getContext('2d');
-let ctx,buf=null,events=[],course=[],src=null,start=0,raf=0,playing=false,fileName='';
+let ctx,buf=null,events=[],course=[],src=null,start=0,raf=0,playing=false,fileName='',master=null;
 const set=(s,p=0)=>{S.textContent=s;M.style.width=p+'%'};
 F.onchange=async e=>{
  const f=e.target.files&&e.target.files[0]; if(!f)return;
@@ -41,6 +41,8 @@ F.onchange=async e=>{
  try{
   set('Reading audio…',15); const ab=await f.arrayBuffer();
   set('Decoding audio…',35); ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();
+  // iOS Safari may create the AudioContext suspended. Build an explicit master output.
+  if(!master){master=ctx.createGain();master.gain.value=1;master.connect(ctx.destination)}
   buf=await ctx.decodeAudioData(ab.slice(0)); set('Loaded '+fmt(buf.duration)+'. Tap ANALYZE.',55);A.disabled=false;
  }catch(err){set('Could not decode this file: '+(err.message||err),0)}
 };
@@ -49,7 +51,7 @@ A.onclick=async()=>{
  set('Finding vocal-like melody events…',60);
  await new Promise(r=>setTimeout(r,30));
  events=analyze(buf); NS.textContent=events.length+' EVENTS'; buildCourse();
- set(events.length?'Ready. Tap PLAY.':'Not enough melody events found. Try another song.',100);
+ set(events.length?'Ready. Tap PLAY — song audio will play with the ball.':'Not enough melody events found. Try another song.',100);
  P.disabled=!events.length;R.disabled=!events.length;A.disabled=false;draw(0);
 };
 function analyze(b){
@@ -88,7 +90,16 @@ function buildCourse(){
 R.onclick=()=>{buildCourse();draw(0)};
 P.onclick=async()=>{
  if(!buf)return;if(playing){stop();return}
- await ctx.resume();src=ctx.createBufferSource();src.buffer=buf;src.connect(ctx.destination);start=ctx.currentTime;camY=410-pos(0).y;src.start();playing=true;P.textContent='STOP';src.onended=stop;tick();
+ if(!ctx) return;
+ try{
+   await ctx.resume();
+   // iPhone/Safari audio unlock: create a tiny silent buffer from this user gesture.
+   const unlock=ctx.createBuffer(1,1,ctx.sampleRate),u=ctx.createBufferSource();
+   u.buffer=unlock;u.connect(master||ctx.destination);u.start(0);
+ }catch(e){set('Audio could not start: '+(e.message||e),100);return}
+ src=ctx.createBufferSource();src.buffer=buf;
+ if(!master){master=ctx.createGain();master.gain.value=1;master.connect(ctx.destination)}
+ src.connect(master);start=ctx.currentTime;camY=410-pos(0).y;src.start();playing=true;P.textContent='STOP';src.onended=stop;tick();
 };
 function stop(){if(src){try{src.stop()}catch(e){}src=null}playing=false;P.textContent='PLAY';cancelAnimationFrame(raf);draw(0)}
 function tick(){if(!playing)return;let t=ctx.currentTime-start;draw(t);if(t<buf.duration)raf=requestAnimationFrame(tick)}
