@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>MelodyBounce</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;background:#d9d9d9;font-family:Arial,sans-serif;color:#171717}body{min-height:100vh}
+#app{width:min(100vw,600px);min-height:100vh;margin:auto;background:#e8e8e8;position:relative;overflow:hidden}
+header{padding:18px 16px 10px;text-align:center}h1{margin:0;font-size:30px}#sub{font-size:13px;font-weight:700;color:#555;margin-top:4px}
+#panel{margin:0 12px 10px;padding:12px;background:#ffffffd9;border:2px solid #222;border-radius:14px;position:relative;z-index:5}
+.row{display:flex;gap:8px;flex-wrap:wrap}.btn,label.btn{flex:1;min-width:125px;text-align:center;border:0;border-radius:10px;padding:12px 10px;background:#161616;color:white;font-weight:900;font-size:14px}
+button:disabled{opacity:.4}input[type=file]{display:none}
+#status{margin-top:9px;font-size:12px;font-weight:800;min-height:30px;line-height:1.35}
+#meter{height:7px;background:#ccc;border-radius:9px;overflow:hidden;margin-top:7px}#meter>div{height:100%;width:0;background:#222;transition:width .15s}
+#stats{display:flex;justify-content:space-between;font-size:11px;font-weight:900;margin-top:8px}
+canvas{display:block;width:100%;height:auto;background:#eee}
+#hint{text-align:center;font-size:11px;font-weight:bold;padding:7px;color:#555}
+</style></head>
+<body><div id="app">
+<header><h1>MELODYBOUNCE</h1><div id="sub">Song → vocal-like melody → synchronized collisions</div></header>
+<div id="panel">
+ <div class="row">
+  <label class="btn">CHOOSE SONG<input id="file" type="file" accept=".mp3,.m4a,.wav,.aac,.ogg,.flac,audio/*"></label>
+  <button class="btn" id="analyze" disabled>ANALYZE</button>
+ </div>
+ <div class="row" style="margin-top:8px"><button class="btn" id="play" disabled>PLAY</button><button class="btn" id="regen" disabled>NEW COURSE</button></div>
+ <div id="status">Choose an MP3/M4A/WAV from Files.</div><div id="meter"><div></div></div>
+ <div id="stats"><span id="name">NO SONG</span><span id="notes">0 EVENTS</span></div>
+</div>
+<canvas id="c" width="600" height="820"></canvas><div id="hint">V1 browser prototype · headphones recommended</div>
+</div>
+<script>
+const F=document.getElementById('file'),A=document.getElementById('analyze'),P=document.getElementById('play'),R=document.getElementById('regen');
+const S=document.getElementById('status'),M=document.querySelector('#meter div'),N=document.getElementById('name'),NS=document.getElementById('notes');
+const C=document.getElementById('c'),X=C.getContext('2d');
+let ctx,buf=null,events=[],course=[],src=null,start=0,raf=0,playing=false,fileName='';
+const set=(s,p=0)=>{S.textContent=s;M.style.width=p+'%'};
+F.onchange=async e=>{
+ const f=e.target.files&&e.target.files[0]; if(!f)return;
+ fileName=f.name;N.textContent=f.name.length>22?f.name.slice(0,19)+'…':f.name;A.disabled=true;P.disabled=true;R.disabled=true;events=[];course=[];drawIdle();
+ try{
+  set('Reading audio…',15); const ab=await f.arrayBuffer();
+  set('Decoding audio…',35); ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();
+  buf=await ctx.decodeAudioData(ab.slice(0)); set('Loaded '+fmt(buf.duration)+'. Tap ANALYZE.',55);A.disabled=false;
+ }catch(err){set('Could not decode this file: '+(err.message||err),0)}
+};
+A.onclick=async()=>{
+ if(!buf)return; A.disabled=true;P.disabled=true;R.disabled=true;
+ set('Finding vocal-like melody events…',60);
+ await new Promise(r=>setTimeout(r,30));
+ events=analyze(buf); NS.textContent=events.length+' EVENTS'; buildCourse();
+ set(events.length?'Ready. Tap PLAY.':'Not enough melody events found. Try another song.',100);
+ P.disabled=!events.length;R.disabled=!events.length;A.disabled=false;draw(0);
+};
+function analyze(b){
+ const sr=b.sampleRate,ch=b.numberOfChannels,L=b.length;
+ const mono=new Float32Array(L);for(let c=0;c<ch;c++){let d=b.getChannelData(c);for(let i=0;i<L;i++)mono[i]+=d[i]/ch}
+ const hop=Math.max(256,Math.round(sr*.018)),win=Math.max(1024,Math.round(sr*.045));
+ let env=[],prev=0;
+ for(let s=0;s+win<L;s+=hop){
+  let sum=0,z=0,last=mono[s];for(let i=s;i<s+win;i+=2){let v=mono[i];sum+=v*v;if((v>=0)!=(last>=0))z++;last=v}
+  let rms=Math.sqrt(sum/(win/2)),flux=Math.max(0,rms-prev);prev=rms*.72+prev*.28;
+  env.push({t:s/sr,r:rms,f:flux,z:z/(win/2)});
+ }
+ let fs=env.map(q=>q.f).sort((a,b)=>a-b),thr=(fs[Math.floor(fs.length*.78)]||.01)*1.15,out=[],lastT=-1;
+ for(let i=2;i<env.length-2;i++){
+  let q=env[i]; if(q.f>thr&&q.f>=env[i-1].f&&q.f>=env[i+1].f&&q.r>.012&&q.t-lastT>.095){
+   // zero crossing gives a coarse pitch-ish feature; intentionally favors human-voice range
+   let hz=Math.max(90,Math.min(900,q.z*sr/2));
+   let midi=69+12*Math.log2(hz/440);
+   out.push({t:q.t,p:midi,str:Math.min(1,q.f/(thr*3))});lastT=q.t;
+  }
+ }
+ // remove extreme machine-gun detections while preserving vocal runs
+ return out.filter((q,i)=>i==0||q.t-out[i-1].t>.07).slice(0,1600);
+}
+function buildCourse(){
+ course=[];let x=300,y=690,dir=-1;
+ for(let i=0;i<events.length;i++){
+  let dt=i?events[i].t-events[i-1].t:.3;
+  let span=Math.max(80,Math.min(245,80+dt*180));
+  let pitch=(events[i].p-60)/24;
+  x=300+dir*(120+Math.min(115,span*.42))+Math.max(-45,Math.min(45,pitch*35));
+  x=Math.max(85,Math.min(515,x));y-=Math.max(75,Math.min(150,80+dt*75));
+  course.push({x,y,t:events[i].t,p:events[i].p,str:events[i].str});dir*=-1;
+ }
+}
+R.onclick=()=>{buildCourse();draw(0)};
+P.onclick=async()=>{
+ if(!buf)return;if(playing){stop();return}
+ await ctx.resume();src=ctx.createBufferSource();src.buffer=buf;src.connect(ctx.destination);start=ctx.currentTime;src.start();playing=true;P.textContent='STOP';src.onended=stop;tick();
+};
+function stop(){if(src){try{src.stop()}catch(e){}src=null}playing=false;P.textContent='PLAY';cancelAnimationFrame(raf);draw(0)}
+function tick(){if(!playing)return;let t=ctx.currentTime-start;draw(t);if(t<buf.duration)raf=requestAnimationFrame(tick)}
+function cameraFor(t){let i=0;while(i+1<course.length&&course[i+1].t<=t)i++;let y=course[i]?.y||690;return Math.min(0,350-y)}
+function pos(t){
+ if(!course.length)return{x:300,y:690,k:0};
+ let i=0;while(i+1<course.length&&course[i+1].t<=t)i++;
+ let a=i?course[i-1]:{x:300,y:690,t:0},b=course[i]||a,dt=Math.max(.001,b.t-a.t),u=Math.max(0,Math.min(1,(t-a.t)/dt));
+ // parabolic arc between scheduled impacts
+ let x=a.x+(b.x-a.x)*u,y=a.y+(b.y-a.y)*u-110*Math.sin(Math.PI*u)*Math.min(1,dt/.45);
+ return{x,y,k:i};
+}
+function draw(t){
+ X.clearRect(0,0,600,820);X.fillStyle='#ddd';X.fillRect(0,0,600,820);
+ let cam=cameraFor(t);X.save();X.translate(0,cam);
+ X.fillStyle='#f2f2f2';X.fillRect(30,-course.length*160-500,540,course.length*160+1400);
+ X.strokeStyle='#c51e27';X.lineWidth=7;X.strokeRect(32,-course.length*160-500,536,course.length*160+1400);
+ X.lineCap='round';
+ for(let i=0;i<course.length;i++){let q=course[i];if(q.y+cam<-100||q.y+cam>900)continue;let side=i%2?-1:1,len=135;
+  X.strokeStyle='#282828';X.lineWidth=15;X.beginPath();X.moveTo(q.x-side*15,q.y+8);X.lineTo(q.x+side*len,q.y-25);X.stroke();
+  X.fillStyle='#555';X.font='bold 11px Arial';X.textAlign='center';X.fillText(noteName(q.p),q.x,q.y+30);
+ }
+ let b=pos(t);X.shadowBlur=18;X.shadowColor='#fff';X.fillStyle='#fff';X.beginPath();X.arc(b.x,b.y,18,0,Math.PI*2);X.fill();X.shadowBlur=0;X.lineWidth=4;X.strokeStyle='#111';X.stroke();
+ // impact ring near event
+ let q=course[b.k];if(q&&Math.abs(t-q.t)<.09){let u=Math.abs(t-q.t)/.09;X.strokeStyle='#111';X.globalAlpha=1-u;X.lineWidth=4;X.beginPath();X.arc(q.x,q.y,22+u*35,0,Math.PI*2);X.stroke();X.globalAlpha=1}
+ X.restore();X.textAlign='left';
+ if(buf){X.fillStyle='#111c';X.fillRect(12,780,576,26);X.fillStyle='#fff';X.font='bold 12px Arial';X.fillText(fmt(t)+' / '+fmt(buf.duration),22,798)}
+}
+function drawIdle(){X.fillStyle='#ddd';X.fillRect(0,0,600,820);X.fillStyle='#777';X.textAlign='center';X.font='bold 22px Arial';X.fillText('UPLOAD A SONG',300,390);X.font='14px Arial';X.fillText('The course will be generated here.',300,420);X.textAlign='left'}
+function fmt(s){s=Math.max(0,s||0);return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')}
+function noteName(m){let a=['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];return a[((Math.round(m)%12)+12)%12]}
+drawIdle();
+</script></body></html>
