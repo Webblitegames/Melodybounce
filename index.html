@@ -136,7 +136,7 @@ function pathPos(path,t){
  let a=i?path[i-1]:{x:path[0].x,y:690,t:0},b=path[i]||a,dt=Math.max(.001,b.t-a.t),u=Math.max(0,Math.min(1,(t-a.t)/dt));
  return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u-95*Math.sin(Math.PI*u)*Math.min(1,dt/.45),k:i};
 }
-let camY=0;
+
 function cameraFor(t){
  let a=pathPos(course,t),b=pathPos(instCourse,t),mid=(a.y+b.y)/2,target=410-mid;
  if(!playing){camY=target;return camY}camY+=(target-camY)*.14;return camY;
