@@ -78,8 +78,14 @@ function analyze(b,mode='vocal'){
  for(let i=2;i<env.length-2;i++){
   let q=env[i]; if(q.f>thr&&q.f>=env[i-1].f&&q.f>=env[i+1].f&&q.r>.012&&q.t-lastT>.095){
    // zero crossing gives a coarse pitch-ish feature; intentionally favors human-voice range
-   let hz=Math.max(90,Math.min(900,q.z*sr/2));
-   let midi=69+12*Math.log2(hz/440);
+   let center=Math.floor(q.t*sr), segStart=Math.max(0,center-Math.floor(win*.35)), segEnd=Math.min(L,segStart+win);
+   let minLag=Math.floor(sr/1000),maxLag=Math.min(Math.floor(sr/70),segEnd-segStart-2),bestLag=0,best=-1;
+   for(let lag=minLag;lag<=maxLag;lag+=2){let corr=0,e1=0,e2=0;
+    for(let n=segStart;n+lag<segEnd;n+=3){let aa=mono[n],bb=mono[n+lag];corr+=aa*bb;e1+=aa*aa;e2+=bb*bb}
+    let norm=corr/Math.sqrt((e1||1)*(e2||1));if(norm>best){best=norm;bestLag=lag}
+   }
+   let hz=bestLag?sr/bestLag:Math.max(70,Math.min(1000,q.z*sr/2));
+   let midi=Math.max(21,Math.min(108,Math.round(69+12*Math.log2(hz/440))));
    out.push({t:q.t,p:midi,str:Math.min(1,q.f/(thr*3))});lastT=q.t;
   }
  }
@@ -97,7 +103,15 @@ function makeCourse(ev,baseX,flip){
   out.push({x,y,t:ev[i].t,p:ev[i].p,str:ev[i].str});dir*=-1;
  }return out;
 }
-function buildCourse(){course=makeCourse(events,215,false);instCourse=makeCourse(instEvents,385,true)}
+function buildCourse(){
+ instCourse=makeCourse(instEvents,385,true);
+ course=makeCourse(events,215,false);
+ // Anchor vocal events to the instrumental's progress so a vocal rest never leaves its ball behind.
+ for(let i=0;i<course.length;i++){
+  let q=course[i],ip=pathPos(instCourse,q.t);
+  q.y=ip.y;
+ }
+}
 R.onclick=()=>{buildCourse();draw(0)};
 P.onclick=async()=>{
  if(!buf)return;if(playing){stop();return}
@@ -121,9 +135,11 @@ function stop(){if(src){try{src.stop()}catch(e){}src=null}playing=false;P.textCo
 let nextNote=0,nextInstNote=0;
 function bounceTone(midi,str=1){
  const now=ctx.currentTime,o=ctx.createOscillator(),g=ctx.createGain();
- o.type='triangle';o.frequency.value=440*Math.pow(2,(Math.round(midi)-69)/12);
- g.gain.setValueAtTime(.0001,now);g.gain.exponentialRampToValueAtTime(.16+str*.12,now+.006);g.gain.exponentialRampToValueAtTime(.0001,now+.22);
- o.connect(g);g.connect(master);o.start(now);o.stop(now+.24);
+ o.type='sine';o.frequency.value=440*Math.pow(2,(Math.round(midi)-69)/12);
+ const o2=ctx.createOscillator(),g2=ctx.createGain();o2.type='sine';o2.frequency.value=o.frequency.value*2;
+ g.gain.setValueAtTime(.0001,now);g.gain.exponentialRampToValueAtTime(.20+str*.13,now+.004);g.gain.exponentialRampToValueAtTime(.0001,now+.55);
+ g2.gain.setValueAtTime(.0001,now);g2.gain.exponentialRampToValueAtTime(.045,now+.003);g2.gain.exponentialRampToValueAtTime(.0001,now+.20);
+ o.connect(g);o2.connect(g2);g.connect(master);g2.connect(master);o.start(now);o2.start(now);o.stop(now+.58);o2.stop(now+.22);
 }
 function tick(){if(!playing)return;let t=ctx.currentTime-start;
  while(nextNote<events.length&&events[nextNote].t<=t+.025){bounceTone(events[nextNote].p,events[nextNote].str);nextNote++}
@@ -137,8 +153,14 @@ function pathPos(path,t){
  return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u-95*Math.sin(Math.PI*u)*Math.min(1,dt/.45),k:i};
 }
 
+function vocalPos(t){
+ let v=pathPos(course,t),i=pathPos(instCourse,t);
+ // Vocal ball shares the instrumental ball's forward progress; only its lane/bounce differs.
+ v.y=i.y;
+ return v;
+}
 function cameraFor(t){
- let a=pathPos(course,t),b=pathPos(instCourse,t),mid=(a.y+b.y)/2,target=410-mid;
+ let a=vocalPos(t),b=pathPos(instCourse,t),mid=(a.y+b.y)/2,target=410-mid;
  if(!playing){camY=target;return camY}camY+=(target-camY)*.14;return camY;
 }
 function drawPath(path,cam,label){
@@ -157,7 +179,7 @@ function draw(t){
  X.fillStyle='#f2f2f2';X.fillRect(30,-Math.max(course.length,instCourse.length)*160-500,540,Math.max(course.length,instCourse.length)*160+1400);
  X.strokeStyle='#c51e27';X.lineWidth=7;X.strokeRect(32,-Math.max(course.length,instCourse.length)*160-500,536,Math.max(course.length,instCourse.length)*160+1400);
  drawPath(course,cam,'V');drawPath(instCourse,cam,'I');
- ball(course,t,'#ffffff');ball(instCourse,t,'#888888');
+ let vb=vocalPos(t);X.shadowBlur=15;X.shadowColor='#ffffff';X.fillStyle='#ffffff';X.beginPath();X.arc(vb.x,vb.y,17,0,Math.PI*2);X.fill();X.shadowBlur=0;X.lineWidth=4;X.strokeStyle='#111';X.stroke();ball(instCourse,t,'#888888');
  X.restore();X.textAlign='left';
  X.fillStyle='#111c';X.fillRect(12,12,180,50);X.fillStyle='#fff';X.font='bold 12px Arial';X.fillText('WHITE = VOCALS',22,32);X.fillText('GRAY = INSTRUMENTAL',22,51);
  if(buf){X.fillStyle='#111c';X.fillRect(12,780,576,26);X.fillStyle='#fff';X.font='bold 12px Arial';X.fillText(fmt(t)+' / '+fmt(buf.duration),22,798)}
