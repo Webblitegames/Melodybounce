@@ -88,11 +88,19 @@ function buildCourse(){
 R.onclick=()=>{buildCourse();draw(0)};
 P.onclick=async()=>{
  if(!buf)return;if(playing){stop();return}
- await ctx.resume();src=ctx.createBufferSource();src.buffer=buf;src.connect(ctx.destination);start=ctx.currentTime;src.start();playing=true;P.textContent='STOP';src.onended=stop;tick();
+ await ctx.resume();src=ctx.createBufferSource();src.buffer=buf;src.connect(ctx.destination);start=ctx.currentTime;camY=410-pos(0).y;src.start();playing=true;P.textContent='STOP';src.onended=stop;tick();
 };
 function stop(){if(src){try{src.stop()}catch(e){}src=null}playing=false;P.textContent='PLAY';cancelAnimationFrame(raf);draw(0)}
 function tick(){if(!playing)return;let t=ctx.currentTime-start;draw(t);if(t<buf.duration)raf=requestAnimationFrame(tick)}
-function cameraFor(t){let i=0;while(i+1<course.length&&course[i+1].t<=t)i++;let y=course[i]?.y||690;return Math.min(0,350-y)}
+let camY=0;
+function cameraFor(t){
+ let b=pos(t);
+ // Keep the ball near the vertical center of the recording. Smooth follow prevents camera jitter.
+ let target=410-b.y;
+ if(!playing){camY=target;return camY}
+ camY+=(target-camY)*.14;
+ return camY;
+}
 function pos(t){
  if(!course.length)return{x:300,y:690,k:0};
  let i=0;while(i+1<course.length&&course[i+1].t<=t)i++;
